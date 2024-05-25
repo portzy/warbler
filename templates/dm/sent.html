@@ -1,0 +1,14 @@
+
+{% extends 'base.html' %}
+{% block content %}
+  <h2>Sent Messages</h2>
+  <ul class="list-group">
+    {% for msg in messages %}
+      <li class="list-group-item">
+        To <a href="/users/{{ msg.recipient.id }}">@{{ msg.recipient.username }}</a>:
+        <p>{{ msg.text }}</p>
+        <small>{{ msg.timestamp }}</small>
+      </li>
+    {% endfor %}
+  </ul>
+{% endblock %}

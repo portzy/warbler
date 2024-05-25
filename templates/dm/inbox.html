@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block content %}
+  <h2>Inbox</h2>
+  <ul class="list-group">
+    {% for msg in messages %}
+      <li class="list-group-item">
+        <a href="/users/{{ msg.sender.id }}">@{{ msg.sender.username }}</a>:
+        <p>{{ msg.text }}</p>
+        <small>{{ msg.timestamp }}</small>
+        <form method="POST" action="/dm/reply/{{ msg.sender.id }}">
+          {{ form.hidden_tag() }}
+          {{ form.text.label }} {{ form.text(size=50) }}
+          <button type="submit">Reply</button>
+        </form>
+      </li>
+    {% endfor %}
+  </ul>
+{% endblock %}

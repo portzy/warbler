@@ -1,18 +1,16 @@
 import os
 
-from flask import Flask, render_template, request, flash, redirect, session, g
+from flask import Flask, render_template, request, flash, redirect, session, g, abort
 # from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 from flask_bcrypt import Bcrypt
-from forms import UserAddForm, LoginForm, MessageForm
-from models import db, connect_db, User, Message
+from forms import UserAddForm, LoginForm, MessageForm, EditProfileForm, DirectMessageForm
+from models import db, connect_db, User, Message, Likes, BlockedUsers, DirectMessage
 
 CURR_USER_KEY = "curr_user"
 
 app = Flask(__name__)
 
-# Get DB_URI from environ variable (useful for production/testing) or,
-# if not set there, use development local db.
 app.config['SQLALCHEMY_DATABASE_URI'] = (
     os.environ.get('DATABASE_URL', 'postgresql:///warbler'))
 
@@ -23,6 +21,9 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', "it's a secret")
 # toolbar = DebugToolbarExtension(app)
 
 connect_db(app)
+
+with app.app_context():
+    db.create_all()
 
 
 ##############################################################################
@@ -207,12 +208,41 @@ def stop_following(follow_id):
 
     return redirect(f"/users/{g.user.id}/following")
 
+@app.route('/users/<int:user_id>/likes', methods=["GET"])
+def show_likes(user_id):
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect('/')
+    user = User.query.get_or_404(user_id)
+    return render_template('users/likes.html', user=user, likes=user.likes)
+
 
 @app.route('/users/profile', methods=["GET", "POST"])
 def profile():
     """Update profile for current user."""
+    if not g.user: #checks if there is no user loaded in the global g object
+        flash('Unauthorized access', 'danger')
+        return redirect('/login')
+    
+    form = EditProfileForm(obj=g.user) #pre-fill the form with the current user's data
 
-    # IMPLEMENT THIS
+    if form.validate_on_submit():
+        if User.authenticate(username=g.user.username, password=form.password.data):
+            g.user.username = form.username.data
+            g.user.email = form.email.data
+            g.user.image_url = form.image_url.data or "/static/images/default-pic.png"
+            g.user.header_image_url = form.header_image_url.data or "/static/images/warbler-hero.jpg"
+            g.user.bio = form.bio.data
+            g.user.location = form.location.data
+            db.session.commit()
+            flash('Profile updated successfully!', 'success')
+            return redirect(f'/users/{g.user.id}')
+        else:
+            flash('Invalid password.', 'danger')
+            return redirect('/')
+    return render_template('users/edit.html', form=form)
+
+
 
 
 @app.route('/users/delete', methods=["POST"])
@@ -279,6 +309,144 @@ def messages_destroy(message_id):
 
     return redirect(f"/users/{g.user.id}")
 
+#####################################################################
+## Likes routes
+@app.route('/messages/<int:message_id>/like', methods=['POST'])
+def add_like(message_id):
+    """Toggle a liked message for the currently-logged-in user."""
+    print("Success!", message_id)
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    liked_message = Message.query.get_or_404(message_id)
+    if liked_message.user_id == g.user.id:
+        return abort(403)
+
+    user_likes = g.user.likes
+
+    if liked_message in user_likes:
+        g.user.likes = [like for like in user_likes if like != liked_message]
+    else:
+        g.user.likes.append(liked_message)
+
+    db.session.commit()
+
+    return redirect("/")
+
+########### BLOCK
+@app.route('/users/block/<int:user_id>', methods=['POST'])
+def block_user(user_id):
+    """Block a user."""
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    blocked_user = User.query.get_or_404(user_id)
+    if blocked_user == g.user:
+        flash("You cannot block yourself.", "danger")
+        return redirect("/")
+
+    block = BlockedUsers(user_id=g.user.id, blocked_user_id=user_id)
+    db.session.add(block)
+    db.session.commit()
+
+    flash(f"{blocked_user.username} has been blocked.", "success")
+    return redirect(f"/users/{user_id}")
+
+@app.route('/users/unblock/<int:user_id>', methods=['POST'])
+def unblock_user(user_id):
+    """Unblock a user."""
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    block = BlockedUsers.query.filter_by(user_id=g.user.id, blocked_user_id=user_id).first()
+    if block:
+        db.session.delete(block)
+        db.session.commit()
+        flash("User has been unblocked.", "success")
+    return redirect(f"/users/{user_id}")
+
+###### DIRECT MESSAGES
+@app.route('/dm/send/<int:user_id>', methods=["GET", "POST"])
+def send_message(user_id):
+    """Send a direct message to another user."""
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    recipient = User.query.get_or_404(user_id)
+    if recipient == g.user:
+        flash("You cannot send a message to yourself.", "danger")
+        return redirect("/")
+
+    form = DirectMessageForm()
+    if form.validate_on_submit():
+        message = DirectMessage(
+            sender_id=g.user.id,
+            recipient_id=user_id,
+            text=form.text.data
+        )
+        db.session.add(message)
+        db.session.commit()
+        flash("Message sent!", "success")
+        return redirect(f"/users/{user_id}")
+
+    return render_template('dm/send.html', form=form, recipient=recipient)
+
+@app.route('/dm/reply/<int:user_id>', methods=["GET", "POST"])
+def reply_message(user_id):
+    """Reply to a direct message."""
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    recipient = User.query.get_or_404(user_id)
+    if recipient == g.user:
+        flash("You cannot reply to yourself.", "danger")
+        return redirect("/")
+
+    form = DirectMessageForm()
+    if form.validate_on_submit():
+        message = DirectMessage(
+            sender_id=g.user.id,
+            recipient_id=user_id,
+            text=form.text.data
+        )
+        db.session.add(message)
+        db.session.commit()
+        flash("Reply sent!", "success")
+        return redirect("/dm/inbox")
+
+    return render_template('dm/reply.html', form=form, recipient=recipient)
+
+
+@app.route('/dm/inbox')
+def inbox():
+    """Show inbox with direct messages."""
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    # Create an instance of DirectMessageForm
+    form = DirectMessageForm()
+
+    messages = DirectMessage.query.filter_by(recipient_id=g.user.id).order_by(DirectMessage.timestamp.desc()).all()
+    return render_template('dm/inbox.html', messages=messages, form=form)  # Pass form to the template
+
+@app.route('/dm/sent')
+def sent_messages():
+    """Show sent messages."""
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    messages = DirectMessage.query.filter_by(sender_id=g.user.id).order_by(DirectMessage.timestamp.desc()).all()
+    return render_template('dm/sent.html', messages=messages)
+
+
 
 ##############################################################################
 # Homepage and error pages
@@ -287,20 +455,13 @@ def messages_destroy(message_id):
 @app.route('/')
 def homepage():
     """Show homepage:
-
     - anon users: no messages
-    - logged in: 100 most recent messages of followed_users
+    - logged in: 100 most recent messages from users followed by the logged-in user
     """
-
     if g.user:
-        messages = (Message
-                    .query
-                    .order_by(Message.timestamp.desc())
-                    .limit(100)
-                    .all())
-
+        followed_user_ids = [user.id for user in g.user.following] + [g.user.id]  # List of user IDs the logged-in user is following + their own ID
+        messages = Message.query.filter(Message.user_id.in_(followed_user_ids)).order_by(Message.timestamp.desc()).limit(100).all()
         return render_template('home.html', messages=messages)
-
     else:
         return render_template('home-anon.html')
 

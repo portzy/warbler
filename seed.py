@@ -16,7 +16,7 @@ with app.app_context():
     # Open and load messages from CSV file
     with open('generator/messages.csv', 'r') as messages:
         message_data = DictReader(messages)
-        db.session.bulk_insert_mappings(Message, message_data)
+        db.session.bulk_insert_mappings(Warble, message_data)
 
     # Open and load follows from CSV file
     with open('generator/follows.csv', 'r') as follows:

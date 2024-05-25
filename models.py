@@ -1,13 +1,11 @@
 """SQLAlchemy models for Warbler."""
 
 from datetime import datetime
-
 from flask_bcrypt import Bcrypt
 from flask_sqlalchemy import SQLAlchemy
 
 bcrypt = Bcrypt()
 db = SQLAlchemy()
-
 
 class Follows(db.Model):
     """Connection of a follower <-> followed_user."""
@@ -26,11 +24,10 @@ class Follows(db.Model):
         primary_key=True,
     )
 
-
 class Likes(db.Model):
-    """Mapping user likes to warbles."""
+    """Mapping user likes to messages."""
 
-    __tablename__ = 'likes' 
+    __tablename__ = 'likes'
 
     id = db.Column(
         db.Integer,
@@ -44,10 +41,18 @@ class Likes(db.Model):
 
     message_id = db.Column(
         db.Integer,
-        db.ForeignKey('messages.id', ondelete='cascade'),
-        unique=True
+        db.ForeignKey('messages.id', ondelete='cascade')
     )
 
+
+class BlockedUsers(db.Model):
+    """Mapping of users blocking other users."""
+
+    __tablename__ = 'blocked_users'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='cascade'))
+    blocked_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='cascade'))
 
 class User(db.Model):
     """User in the system."""
@@ -94,25 +99,26 @@ class User(db.Model):
         nullable=False,
     )
 
-    messages = db.relationship('Message')
-
     followers = db.relationship(
         "User",
         secondary="follows",
         primaryjoin=(Follows.user_being_followed_id == id),
-        secondaryjoin=(Follows.user_following_id == id)
-    )
-
-    following = db.relationship(
-        "User",
-        secondary="follows",
-        primaryjoin=(Follows.user_following_id == id),
-        secondaryjoin=(Follows.user_being_followed_id == id)
+        secondaryjoin=(Follows.user_following_id == id),
+        backref="following"
     )
 
     likes = db.relationship(
         'Message',
-        secondary="likes"
+        secondary="likes",
+        backref="liked_by"
+    )
+
+    blocked_users = db.relationship(
+        "User",
+        secondary="blocked_users",
+        primaryjoin=(BlockedUsers.user_id == id),
+        secondaryjoin=(BlockedUsers.blocked_user_id == id),
+        backref="blocked_by"
     )
 
     def __repr__(self):
@@ -120,15 +126,17 @@ class User(db.Model):
 
     def is_followed_by(self, other_user):
         """Is this user followed by `other_user`?"""
-
         found_user_list = [user for user in self.followers if user == other_user]
         return len(found_user_list) == 1
 
     def is_following(self, other_user):
-        """Is this user following `other_use`?"""
-
+        """Is this user following `other_user`?"""
         found_user_list = [user for user in self.following if user == other_user]
         return len(found_user_list) == 1
+
+    def is_blocking(self, other_user):
+        """Check if this user is blocking another user."""
+        return other_user in self.blocked_users
 
     @classmethod
     def signup(cls, username, email, password, image_url):
@@ -136,7 +144,6 @@ class User(db.Model):
 
         Hashes password and adds user to system.
         """
-
         hashed_pwd = bcrypt.generate_password_hash(password).decode('UTF-8')
 
         user = User(
@@ -159,7 +166,6 @@ class User(db.Model):
 
         If can't find matching user (or if password is wrong), returns False.
         """
-
         user = cls.query.filter_by(username=username).first()
 
         if user:
@@ -188,7 +194,7 @@ class Message(db.Model):
     timestamp = db.Column(
         db.DateTime,
         nullable=False,
-        default=datetime.utcnow(),
+        default=datetime.utcnow,
     )
 
     user_id = db.Column(
@@ -197,14 +203,27 @@ class Message(db.Model):
         nullable=False,
     )
 
-    user = db.relationship('User')
+    user = db.relationship('User', backref='messages')
 
+
+class DirectMessage(db.Model):
+    """Direct messages between users."""
+
+    __tablename__ = 'direct_messages'
+
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='cascade'), nullable=False)
+    recipient_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='cascade'), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    sender = db.relationship('User', foreign_keys=[sender_id], backref='sent_messages')
+    recipient = db.relationship('User', foreign_keys=[recipient_id], backref='received_messages')
 
 def connect_db(app):
     """Connect this database to provided Flask app.
 
     You should call this in your Flask app.
     """
-
     db.app = app
     db.init_app(app)
